@@ -1,26 +1,102 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-bg: #09090b;
+  --color-surface: #18181b;
+  --color-border: #27272a;
+  --color-text-primary: #f4f4f5;
+  --color-text-secondary: #a1a1aa;
+  --color-accent: #7c3aed;
+  --color-accent-hover: #6d28d9;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Base */
+html {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  @apply bg-zinc-950 text-zinc-100 antialiased;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-zinc-950;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-700 rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-zinc-600;
+}
+
+/* Selection */
+::selection {
+  @apply bg-violet-600/40 text-violet-100;
+}
+
+/* Focus ring */
+:focus-visible {
+  @apply outline-none ring-2 ring-violet-500 ring-offset-2 ring-offset-zinc-950;
+}
+
+/* Aspect ratio for poster */
+.aspect-poster {
+  aspect-ratio: 2 / 3;
+}
+
+/* Smooth page transitions */
+.page-enter {
+  animation: slideUp 0.25s ease-out;
+}
+
+/* Line clamping utilities */
+.line-clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Movie Card Extension Style */
+.mc-card {
+  @apply bg-zinc-900 border border-zinc-800 rounded-3xl overflow-hidden transition-all duration-300;
+  box-shadow: 0 4px 20px -4px rgba(0, 0, 0, 0.5);
+}
+
+.mc-card:hover {
+  @apply border-zinc-700 bg-zinc-900/90 -translate-y-1;
+  box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7);
+}
+
+.mc-poster-overlay {
+  background: linear-gradient(to top, rgba(9, 9, 11, 0.9) 0%, rgba(9, 9, 11, 0.4) 40%, transparent 100%);
+}
+
+.mc-rating-badge {
+  @apply px-2 py-0.5 rounded-md text-[10px] font-bold border;
+}
+
+.mc-genre-tag {
+  @apply px-2 py-0.5 rounded-full bg-zinc-800 text-[10px] text-zinc-400 whitespace-nowrap border border-zinc-700;
+}
+
