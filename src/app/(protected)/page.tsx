@@ -3,8 +3,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/hooks/useAuth'
-import { getAllRatings, deleteRating } from '@/lib/firebase/ratings'
+import { getPaginatedRatings, deleteRating } from '@/lib/firebase/ratings'
 import type { GroupedRating } from '@/lib/firebase/ratings'
+import type { DocumentSnapshot } from 'firebase/firestore'
 import { RatedMovieCard } from '@/components/movie/RatedMovieCard'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
@@ -13,18 +14,12 @@ import { cn } from '@/lib/utils'
 
 type SortKey = 'date' | 'rating'
 
-const PAGE_SIZE = 9
+const PAGE_SIZE = 6
 
 // ── Cache helpers (mirroring the Chrome extension logic) ──────────────────────
 
-/** Key for the raw ratings list, scoped per user */
-const ratingsKey = (uid: string) => `ratings_cache_${uid}`
-
 /** Per-film metadata key — shared across all pages (same as extension: kp_movie_{id}) */
 const movieKey = (movieId: string | number) => `kp_movie_${movieId}`
-
-/** How long the ratings list stays valid before we re-fetch from Firestore (7 days) */
-const RATINGS_TTL = 7 * 24 * 60 * 60 * 1000
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -114,9 +109,12 @@ export default function HomePage() {
   const [allRatings, setAllRatings] = useState<GroupedRating[]>([])
   const [loading, setLoading] = useState(true)
   const [enriching, setEnriching] = useState(false)
-  const [fromCache, setFromCache] = useState(false)
 
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+  // Pagination state
+  const [lastDoc, setLastDoc] = useState<DocumentSnapshot | null>(null)
+  const [hasMore, setHasMore] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+
   const sentinelRef = useRef<HTMLDivElement | null>(null)
 
   const [sort, setSort] = useState<SortKey>('date')
@@ -125,38 +123,23 @@ export default function HomePage() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   // ── Main loader ────────────────────────────────────────────────────────────
-  const loadRatings = useCallback(async (forceRefresh = false) => {
+  const loadRatings = useCallback(async (isLoadMore = false, forceRefresh = false) => {
     if (!user) return
-    setLoading(true)
-    setFromCache(false)
+    if (isLoadMore && (!hasMore || loadingMore)) return
+
+    if (!isLoadMore) setLoading(true)
+    else setLoadingMore(true)
 
     try {
-      let raw: GroupedRating[] = []
-      const cKey = ratingsKey(user.uid)
+      const currentLastDoc = isLoadMore ? lastDoc : null
+      
+      const { groupedRatings: raw, lastDoc: nextLastDoc, hasMore: nextHasMore } = 
+        await getPaginatedRatings(PAGE_SIZE, currentLastDoc)
 
-      // 1. Try ratings list cache (7-day TTL, scoped to user)
-      if (!forceRefresh) {
-        try {
-          const cached = localStorage.getItem(cKey)
-          if (cached) {
-            const { timestamp, data } = JSON.parse(cached)
-            if (Date.now() - timestamp < RATINGS_TTL) {
-              raw = data
-              setFromCache(true)
-            }
-          }
-        } catch (e) {
-          console.warn('[home] cache parse error', e)
-        }
-      }
+      setLastDoc(nextLastDoc)
+      setHasMore(nextHasMore)
 
-      // 2. Fetch from Firestore if cache miss / forced
-      if (raw.length === 0) {
-        raw = await getAllRatings(10000)
-        localStorage.setItem(cKey, JSON.stringify({ timestamp: Date.now(), data: raw }))
-      }
-
-      // 3. Quick-enrich from per-film localStorage (free, instant — same as extension's enrichFromLocalStorage)
+      // 3. Quick-enrich from per-film localStorage (free, instant)
       const quickEnriched = raw.map(r => {
         const cached = readMovieCache(r.movieId)
         if (!cached) return r
@@ -172,9 +155,17 @@ export default function HomePage() {
         }
       })
 
-      setAllRatings(quickEnriched)
-      setVisibleCount(PAGE_SIZE)
-      setLoading(false)
+      setAllRatings(prev => {
+        if (!isLoadMore) return quickEnriched
+        
+        // Deduplicate in case a movie spans multiple pages
+        const existingIds = new Set(prev.map(r => r.movieId))
+        const newUnique = quickEnriched.filter(r => !existingIds.has(r.movieId))
+        return [...prev, ...newUnique]
+      })
+
+      if (!isLoadMore) setLoading(false)
+      else setLoadingMore(false)
 
       // 4. Enrich remaining records (missing poster/title) via API
       const needsEnrich = quickEnriched.filter(r => !r.movieTitle || !r.posterPath)
@@ -186,39 +177,52 @@ export default function HomePage() {
       for (let i = 0; i < quickEnriched.length; i += BATCH) {
         const batch = quickEnriched.slice(i, i + BATCH)
         const enriched = await Promise.all(batch.map(r => enrichRating(r)))
+        
         current = current.map((r, idx) => {
           const bi = idx - i
           return bi >= 0 && bi < BATCH ? enriched[bi] : r
         })
-        setAllRatings([...current])
-      }
 
-      // 5. Update ratings cache with enriched data so next load is instant
-      localStorage.setItem(cKey, JSON.stringify({ timestamp: Date.now(), data: current }))
+        setAllRatings(prev => {
+           // Map updates back to main array
+           const updated = [...prev]
+           current.forEach(cr => {
+             const idx = updated.findIndex(u => u.movieId === cr.movieId)
+             if (idx !== -1) updated[idx] = cr
+           })
+           return updated
+        })
+      }
       setEnriching(false)
 
     } catch (err) {
       console.error('[home] loadRatings error:', err)
-      setLoading(false)
+      if (!isLoadMore) setLoading(false)
+      else setLoadingMore(false)
     }
-  }, [user])
+  }, [user, hasMore, loadingMore, lastDoc])
 
   useEffect(() => {
     if (user) loadRatings()
-  }, [user, loadRatings])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid])
 
   // ── Infinite scroll ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (loading) return
+    if (loading || loadingMore || !hasMore) return
     const sentinel = sentinelRef.current
     if (!sentinel) return
     const observer = new IntersectionObserver(
-      entries => { if (entries[0].isIntersecting) setVisibleCount(prev => prev + PAGE_SIZE) },
+      entries => { 
+        if (entries[0].isIntersecting) {
+          loadRatings(true)
+        }
+      },
       { rootMargin: '200px' }
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [loading, allRatings.length])
+  }, [loading, loadingMore, hasMore, loadRatings])
 
   // ── Sort ───────────────────────────────────────────────────────────────────
   const sorted = [...allRatings].sort((a, b) => {
@@ -228,8 +232,7 @@ export default function HomePage() {
     return (ts(a.createdAt) - ts(b.createdAt)) * dir
   })
 
-  const visible = sorted.slice(0, visibleCount)
-  const hasMore = visibleCount < sorted.length
+  const visible = sorted
 
   const toggleSort = (key: SortKey) => {
     if (sort === key) setSortDir(d => d === 'desc' ? 'asc' : 'desc')
@@ -242,8 +245,6 @@ export default function HomePage() {
     setDeletingId(id)
     const updated = allRatings.filter(r => r._id !== id)
     setAllRatings(updated)
-    // Update ratings list cache
-    localStorage.setItem(ratingsKey(user.uid), JSON.stringify({ timestamp: Date.now(), data: updated }))
     await deleteRating(id)
     setDeletingId(null)
   }
@@ -262,18 +263,8 @@ export default function HomePage() {
           {!loading && allRatings.length > 0 && (
             <div className="flex items-center gap-3 flex-wrap">
               <div className="px-3 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-xs text-zinc-400 font-medium">
-                Всего фильмов: <span className="text-zinc-100">{allRatings.length}</span>
+                Показано фильмов: <span className="text-zinc-100">{allRatings.length}</span>
               </div>
-              {avg && (
-                <div className="px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/20 text-xs text-violet-400 font-medium">
-                  Средний балл: <span className="text-violet-300 font-bold">{avg}</span>
-                </div>
-              )}
-              {fromCache && !enriching && (
-                <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 font-medium">
-                  из кэша
-                </div>
-              )}
               {enriching ? (
                 <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-xs text-amber-400">
                   <RefreshCw className="w-3 h-3 animate-spin" />
@@ -281,7 +272,7 @@ export default function HomePage() {
                 </div>
               ) : (
                 <button
-                  onClick={() => loadRatings(true)}
+                  onClick={() => loadRatings(false, true)}
                   className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700/50 text-xs text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
                   title="Принудительно обновить из базы данных"
                 >
@@ -366,7 +357,7 @@ export default function HomePage() {
           {hasMore && (
             <div ref={sentinelRef} className="mt-10">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
-                {Array.from({ length: Math.min(PAGE_SIZE, sorted.length - visibleCount) }).map((_, i) => (
+                {Array.from({ length: PAGE_SIZE }).map((_, i) => (
                   <Skeleton key={i} className="h-[460px] rounded-3xl opacity-50" />
                 ))}
               </div>
