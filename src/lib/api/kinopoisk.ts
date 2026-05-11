@@ -7,7 +7,7 @@ const API_BASE = '/api/kinopoisk'
 export async function searchMovies(
   query: string,
   page = 1,
-  limit = 20
+  limit = 10
 ): Promise<KinopoiskSearchResponse> {
   const params = new URLSearchParams({
     query,
