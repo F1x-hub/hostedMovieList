@@ -1,6 +1,6 @@
 import type { KinopoiskMovie, KinopoiskSearchResponse } from '@/types'
 
-const BASE_URL = 'https://api.kinopoisk.dev/v1.4'
+const BASE_URL = 'https://api.poiskkino.dev/v1.4'
 
 // Fallback to internal API if NEXT_PUBLIC keys are not provided
 const INTERNAL_API_BASE = '/api/kinopoisk'

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const BASE_URL = 'https://api.kinopoisk.dev/v1.4'
+const BASE_URL = 'https://api.poiskkino.dev/v1.4'
 
 function getKeys(): string[] {
   return (process.env.KINOPOISK_API_KEYS ?? '').split(',').map((k) => k.trim()).filter(Boolean)
