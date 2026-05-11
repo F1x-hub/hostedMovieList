@@ -1,41 +1,8 @@
 import type { KinopoiskMovie, KinopoiskSearchResponse } from '@/types'
 
-const BASE_URL = 'https://api.poiskkino.dev/v1.4'
-
-// Fallback to internal API if NEXT_PUBLIC keys are not provided
-const INTERNAL_API_BASE = '/api/kinopoisk'
-
-function getClientKeys(): string[] {
-  return (process.env.NEXT_PUBLIC_KINOPOISK_API_KEYS ?? '')
-    .split(',')
-    .map((k) => k.trim())
-    .filter(Boolean)
-}
-
-async function fetchKinopoisk(endpoint: string, params?: URLSearchParams): Promise<Response> {
-  const keys = getClientKeys()
-  
-  // If no public keys are exposed, fallback to our Next.js API route
-  // (which might still be blocked on Vercel, but works locally without exposing keys)
-  if (keys.length === 0) {
-    const url = `${INTERNAL_API_BASE}${endpoint}${params ? `?${params.toString()}` : ''}`
-    return fetch(url)
-  }
-
-  const url = `${BASE_URL}${endpoint}${params ? `?${params.toString()}` : ''}`
-  let lastError: Error | null = null
-
-  // Try each key for rate limits (429)
-  for (const key of keys) {
-    const res = await fetch(url, {
-      headers: { 'X-API-KEY': key },
-    })
-    if (res.status !== 429) return res
-    lastError = new Error(`Rate limited on key ending ...${key.slice(-4)}`)
-  }
-  
-  throw lastError ?? new Error('All Kinopoisk keys exhausted')
-}
+// All requests go through our Next.js API routes (server-side proxy).
+// Direct browser→Kinopoisk calls are blocked by CORS.
+const API_BASE = '/api/kinopoisk'
 
 export async function searchMovies(
   query: string,
@@ -45,17 +12,32 @@ export async function searchMovies(
   const params = new URLSearchParams({
     query,
     limit: String(limit),
-    page: String(page)
+    page: String(page),
   })
-  
-  const res = await fetchKinopoisk('/movie/search', params)
-  if (!res.ok) throw new Error(`Search failed: ${res.status}`)
+  const url = `${API_BASE}/search?${params.toString()}`
+  console.log('[kinopoisk client] searchMovies →', url)
+
+  const res = await fetch(url)
+  console.log('[kinopoisk client] searchMovies response status:', res.status)
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    console.error('[kinopoisk client] searchMovies error body:', body)
+    throw new Error(`Search failed: ${res.status}`)
+  }
   return res.json()
 }
 
 export async function getMovie(id: number | string): Promise<KinopoiskMovie> {
-  const res = await fetchKinopoisk(`/movie/${id}`)
-  if (!res.ok) throw new Error(`Movie fetch failed: ${res.status}`)
+  const url = `${API_BASE}/movie/${id}`
+  console.log('[kinopoisk client] getMovie →', url)
+
+  const res = await fetch(url)
+  console.log('[kinopoisk client] getMovie response status:', res.status)
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    console.error('[kinopoisk client] getMovie error body:', body)
+    throw new Error(`Movie fetch failed: ${res.status}`)
+  }
   return res.json()
 }
 
@@ -69,7 +51,12 @@ export async function getRandomMovie(filters?: {
   if (filters?.yearFrom) params.set('year.from', String(filters.yearFrom))
   if (filters?.yearTo) params.set('year.to', String(filters.yearTo))
 
-  const res = await fetchKinopoisk('/random', params)
+  const qs = params.toString()
+  const url = `${API_BASE}/random${qs ? `?${qs}` : ''}`
+  console.log('[kinopoisk client] getRandomMovie →', url)
+
+  const res = await fetch(url)
+  console.log('[kinopoisk client] getRandomMovie response status:', res.status)
   if (!res.ok) throw new Error(`Random movie fetch failed: ${res.status}`)
   return res.json()
 }
